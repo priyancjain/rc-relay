@@ -65,7 +65,7 @@ from dotenv import load_dotenv
 load_dotenv()
 # ---- config ----
 ZOHO_URL = os.getenv("ZOHO_CRM_FUNCTION_URL") 
-VERIFY_TOKEN = os.getenv("RC_VERIFICATION_TOKEN") or ""   # optional shared secret
+VERIFY_TOKEN = os.getenv("RC_VERIFICATION_TOKEN")    # optional shared secret
 
 # ---- simple in-memory de-dup cache (uuid -> expiry) ----
 TTL_SECONDS = 300  # keep seen uuids for 5 minutes
