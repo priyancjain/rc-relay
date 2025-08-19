@@ -61,9 +61,10 @@ from collections import OrderedDict
 load_dotenv()
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
-
+from dotenv import load_dotenv
+load_dotenv()
 # ---- config ----
-ZOHO_URL = os.getenv("ZOHO_CRM_FUNCTION_URL") or "https://www.zohoapis.com/crm/v7/functions/XXXXX/actions/execute?auth_type=apikey&zapikey=YOUR_ZAPIKEY"
+ZOHO_URL = os.getenv("ZOHO_CRM_FUNCTION_URL") 
 VERIFY_TOKEN = os.getenv("RC_VERIFICATION_TOKEN") or ""   # optional shared secret
 
 # ---- simple in-memory de-dup cache (uuid -> expiry) ----
