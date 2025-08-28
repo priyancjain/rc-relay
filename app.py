@@ -1,87 +1,89 @@
-
-
-from flask import Flask, request, Response
+from flask import Flask, request, Response, jsonify
 import os, requests, logging, json, time
 from dotenv import load_dotenv
 from collections import OrderedDict
 
-# Load environment variables from .env file
 load_dotenv()
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
-from dotenv import load_dotenv
-load_dotenv()
-# ---- config ----
-ZOHO_URL = os.getenv("ZOHO_CRM_FUNCTION_URL") 
-VERIFY_TOKEN = os.getenv("RC_VERIFICATION_TOKEN")    # optional shared secret
 
-# ---- simple in-memory de-dup cache (uuid -> expiry) ----
-TTL_SECONDS = 300  # keep seen uuids for 5 minutes
+ZOHO_URL = os.getenv("ZOHO_CRM_FUNCTION_URL")
+VERIFY_TOKEN = os.getenv("RC_VERIFICATION_TOKEN")
+
+TTL_SECONDS = 300
 _seen = OrderedDict()
 
 def seen_uuid(u: str) -> bool:
-    """Return True if we've already processed this uuid recently."""
     if not u:
         return False
     now = time.time()
-    # purge expired
     to_delete = []
     for k, exp in _seen.items():
         if exp < now:
             to_delete.append(k)
         else:
-            break  # Ordered by insertion; stop at first non-expired
+            break
     for k in to_delete:
         _seen.pop(k, None)
-
     if u in _seen:
         return True
     _seen[u] = now + TTL_SECONDS
-    # cap size just in case
     if len(_seen) > 2000:
         _seen.popitem(last=False)
     return False
 
-@app.post("/")
-def rc_webhook_root():
-    return handle_rc_webhook("")
+# --- Health/landing: allow GET/HEAD/OPTIONS so Render/browser don't 405 ---
+@app.route("/", methods=["GET", "OPTIONS"])
+def root_health():
+    if request.method == "OPTIONS":
+        resp = app.make_response(("", 204))
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
+        return resp
+    return "OK", 200
 
-@app.post("/<path:path>")
+# --- Webhook endpoint(s): POST only ---
+@app.post("/rc")
+def rc_webhook_root():
+    return handle_rc_webhook("rc")
+
+@app.post("/rc/<path:path>")
 def rc_webhook_any(path):
-    return handle_rc_webhook(path)
+    return handle_rc_webhook(f"rc/{path}")
 
 def handle_rc_webhook(path):
-    # 1) Validation handshake
+    # 1) RingCentral validation handshake
     vt = request.headers.get("Validation-Token")
     if vt:
         app.logger.info("RC validation ping on /%s", path)
+        # Must echo header back with 200 and (ideally) no body
         return Response(status=200, headers={"Validation-Token": vt})
 
-    # 2) Optional shared secret for normal events (SOFT CHECK)
+    # 2) Optional shared secret (soft check to avoid RC retries)
     if VERIFY_TOKEN:
         incoming = request.headers.get("Verification-Token")
         if incoming != VERIFY_TOKEN:
-            # Don't 403 — that causes RC to retry the same event many times
             app.logger.warning("Verification-Token mismatch: got=%r expected=%r", incoming, VERIFY_TOKEN)
 
-    # 3) Parse JSON (if any) and drop duplicates by uuid
+    # 3) Parse JSON and drop dupes by uuid (if present)
     try:
-        payload = request.get_json(force=False, silent=True) or {}
+        payload = request.get_json(silent=True) or {}
     except Exception:
         payload = {}
 
-    u = payload.get("uuid")
+    u = payload.get("uuid") or payload.get("eventId")  # some RC events use eventId
     if u and seen_uuid(u):
-        app.logger.info("Duplicate notification dropped (uuid=%s)", u)
+        app.logger.info("Duplicate notification dropped (id=%s)", u)
         return Response(status=200)
 
-    # 4) Forward to Zoho (even if payload is empty; RC sometimes sends pings)
+    # 4) Forward to Zoho (best-effort)
     try:
         r = requests.post(
             ZOHO_URL,
             headers={"Content-Type": "application/json"},
             data=json.dumps(payload),
-            timeout=8
+            timeout=10,
         )
         app.logger.info("Forwarded to Zoho: %s %s", r.status_code, r.text[:200])
     except Exception:
@@ -92,4 +94,4 @@ def handle_rc_webhook(path):
 
 @app.get("/health")
 def health():
-    return {"ok": True}, 200
+    return jsonify(ok=True), 200
